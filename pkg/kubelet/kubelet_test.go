@@ -2724,6 +2724,24 @@ type testPodAdmitHandler struct {
 	podsToReject []*v1.Pod
 }
 
+type recordingTrackPodCertificateManager struct {
+	trackedPods []types.UID
+}
+
+func (m *recordingTrackPodCertificateManager) TrackPod(ctx context.Context, pod *v1.Pod) {
+	m.trackedPods = append(m.trackedPods, pod.UID)
+}
+
+func (m *recordingTrackPodCertificateManager) ForgetPod(ctx context.Context, pod *v1.Pod) {}
+
+func (m *recordingTrackPodCertificateManager) GetPodCertificateCredentialBundle(ctx context.Context, namespace, podName, podUID, volumeName string, sourceIndex int) ([]byte, []byte, error) {
+	return nil, nil, nil
+}
+
+func (m *recordingTrackPodCertificateManager) MetricReport() *podcertificate.MetricReport {
+	return &podcertificate.MetricReport{}
+}
+
 // Admit rejects all pods in the podsToReject list with a matching UID.
 func (a *testPodAdmitHandler) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitResult {
 	for _, podToReject := range a.podsToReject {
@@ -2770,6 +2788,8 @@ func TestHandlePodAdditionsInvokesPodAdmitHandlers(t *testing.T) {
 	podToReject := pods[0]
 	podToAdmit := pods[1]
 	podsToReject := []*v1.Pod{podToReject}
+	podCertificateManager := &recordingTrackPodCertificateManager{}
+	kl.podCertificateManager = podCertificateManager
 
 	kl.allocationManager.AddPodAdmitHandlers(lifecycle.PodAdmitHandlers{&testPodAdmitHandler{podsToReject: podsToReject}})
 
@@ -2778,6 +2798,7 @@ func TestHandlePodAdditionsInvokesPodAdmitHandlers(t *testing.T) {
 	// Check pod status stored in the status map.
 	checkPodStatus(t, kl, podToReject, v1.PodFailed)
 	checkPodStatus(t, kl, podToAdmit, v1.PodPending)
+	assert.Equal(t, []types.UID{podToAdmit.UID}, podCertificateManager.trackedPods)
 }
 
 func TestPodResourceAllocationReset(t *testing.T) {
