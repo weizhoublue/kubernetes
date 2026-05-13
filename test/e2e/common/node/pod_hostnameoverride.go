@@ -25,6 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2eoutput "k8s.io/kubernetes/test/e2e/framework/pod/output"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
@@ -53,6 +54,10 @@ func newTestPod(namespace string) *v1.Pod {
 }
 
 var _ = SIGDescribe("Override hostname of Pod", framework.WithNodeConformance(), framework.WithFeatureGate(features.HostnameOverride), func() {
+	ginkgo.BeforeEach(func() {
+		e2eskipper.SkipIfNodeOSDistroIs("windows")
+	})
+
 	f := framework.NewDefaultFramework("hostfqdn")
 	f.NamespacePodSecurityLevel = admissionapi.LevelBaseline
 
