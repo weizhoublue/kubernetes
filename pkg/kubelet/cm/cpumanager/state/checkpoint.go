@@ -266,9 +266,30 @@ func (cp *CPUManagerCheckpointV2) VerifyChecksum() error {
 func (cp *CPUManagerCheckpointV3) VerifyChecksum() error {
 	ck := cp.Checksum
 	cp.Checksum = 0
+
 	err := ck.Verify(cp)
+	if err == nil {
+		cp.Checksum = ck
+		return nil
+	}
+	// If the standard verification failed, it could be a legacy checkpoint
+	// where CPUManagerCheckpointV3 was a type alias for CPUManagerCheckpoint.
+	// Fallback to the legacy verification method, when V4 is latest.
+
+	object := dump.ForHash(cp)
+	object = strings.Replace(object, "CPUManagerCheckpointV3", "CPUManagerCheckpoint", 1)
 	cp.Checksum = ck
-	return err
+
+	hash := fnv.New32a()
+	_, _ = fmt.Fprintf(hash, "%v", object)
+	actualCS := checksum.Checksum(hash.Sum32())
+	if cp.Checksum != actualCS {
+		return &errors.CorruptCheckpointError{
+			ActualCS:   uint64(actualCS),
+			ExpectedCS: uint64(cp.Checksum),
+		}
+	}
+	return nil
 }
 
 // VerifyChecksum verifies that current checksum of checkpoint is valid in v4 format

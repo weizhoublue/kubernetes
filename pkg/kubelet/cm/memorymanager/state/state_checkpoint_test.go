@@ -46,6 +46,10 @@ func assertStateEqual(t *testing.T, restoredState, expectedState State) {
 	expectedMemoryAssignments := expectedState.GetMemoryAssignments()
 	restoredMemoryAssignments := restoredState.GetMemoryAssignments()
 	assert.Equal(t, expectedMemoryAssignments, restoredMemoryAssignments, "state memory assignments mismatch")
+
+	expectedPodAssignments := expectedState.GetPodMemoryAssignments()
+	restoredPodAssignments := restoredState.GetPodMemoryAssignments()
+	assert.Equal(t, expectedPodAssignments, restoredPodAssignments, "state pod memory assignments mismatch")
 }
 
 func TestCheckpointStateRestore(t *testing.T) {
@@ -202,7 +206,7 @@ func TestCheckpointStateRestore(t *testing.T) {
 					"entries":{"pod":{"container1":[{"numaAffinity":[0],"type":"memory","size":512}]}},
 					"podEntries":{"pod":{"memoryBlocks":[{"numaAffinity":[0],"type":"memory","size":512}]}},
 					"checksum": 1278640530
-        }`,
+	        }`,
 			"",
 			&stateMemory{
 				assignments: ContainerMemoryAssignments{
@@ -251,7 +255,7 @@ func TestCheckpointStateRestore(t *testing.T) {
 					"entries":{"pod":{"container1":[{"numaAffinity":[0],"type":"memory","size":512}]}},
 					"podEntries":{"pod":{"memoryBlocks":[{"numaAffinity":[0],"type":"memory","size":512}]}},
 					"checksum": 1278640530
-        }`,
+	        }`,
 			"checkpoint is corrupted, please drain this node and delete the memory manager checkpoint file",
 			&stateMemory{
 				assignments: ContainerMemoryAssignments{
@@ -310,6 +314,44 @@ func TestCheckpointStateRestore(t *testing.T) {
 			}`,
 			"checkpoint is corrupted",
 			&stateMemory{},
+			true,
+		},
+		{
+			"Restore corrupt V2 checkpoint with podEntries falls back to V1, discarding residual podEntries",
+			`{
+				"policyName":"static",
+				"machineState":{"0":{"numberOfAssignments":0,"memoryMap":{"memory":{"total":2048,"systemReserved":512,"allocatable":1536,"reserved":512,"free":1024}},"cells":[]}},
+				"entries":{"pod":{"container1":[{"numaAffinity":[0],"type":"memory","size":512}]}},
+				"podEntries":{"pod":{"memoryBlocks":[{"numaAffinity":[0],"type":"memory","size":256}]}},
+				"checksum": 0
+			}`,
+			"",
+			&stateMemory{
+				assignments: ContainerMemoryAssignments{
+					"pod": map[string][]Block{
+						"container1": {
+							{
+								NUMAAffinity: []int{0},
+								Type:         v1.ResourceMemory,
+								Size:         512,
+							},
+						},
+					},
+				},
+				machineState: NUMANodeMap{
+					0: &NUMANodeState{
+						MemoryMap: map[v1.ResourceName]*MemoryTable{
+							v1.ResourceMemory: {
+								Allocatable:    1536,
+								Free:           1024,
+								Reserved:       512,
+								SystemReserved: 512,
+								TotalMemSize:   2048,
+							},
+						},
+					},
+				},
+			},
 			true,
 		},
 	}

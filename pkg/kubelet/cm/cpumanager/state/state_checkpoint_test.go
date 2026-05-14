@@ -775,6 +775,53 @@ func TestCPUManagerCheckpoint_MarshalCheckpoint_HashCompatibility(t *testing.T) 
 	}
 }
 
+// TestV3VerifyChecksumLegacyCompatibility verifies that V3 checkpoints written
+// by older kubelets (where CPUManagerCheckpointV3 was a type alias for CPUManagerCheckpoint)
+// can still pass VerifyChecksum after V3 became an independent struct.
+func TestV3VerifyChecksumLegacyCompatibility(t *testing.T) {
+	type CPUManagerCheckpoint struct {
+		PolicyName    string                       `json:"policyName"`
+		DefaultCPUSet string                       `json:"defaultCpuSet"`
+		Entries       map[string]map[string]string `json:"entries,omitempty"`
+		PodEntries    PodCPUAssignments            `json:"podEntries,omitempty"`
+		Checksum      checksum.Checksum            `json:"checksum"`
+	}
+
+	cpV3 := &CPUManagerCheckpointV3{
+		PolicyName:    "static",
+		DefaultCPUSet: "1-2",
+		Entries: map[string]map[string]string{
+			"pod1": {
+				"container1": "5-6",
+				"container2": "3-4",
+			},
+		},
+		PodEntries: PodCPUAssignments{
+			"pod2": PodEntry{CPUSet: cpuset.New(7, 8, 9)},
+		},
+	}
+
+	// Compute the checksum the way an older kubelet would (with type name "CPUManagerCheckpoint")
+	cpV3.Checksum = checksum.New(&CPUManagerCheckpoint{
+		PolicyName:    cpV3.PolicyName,
+		DefaultCPUSet: cpV3.DefaultCPUSet,
+		Entries:       cpV3.Entries,
+		PodEntries:    cpV3.PodEntries,
+	})
+
+	err := cpV3.VerifyChecksum()
+	if err != nil {
+		t.Errorf("V3 VerifyChecksum failed for legacy checksum: %v", err)
+	}
+
+	// Corrupt the checksum and verify it fails
+	cpV3.Checksum = 12345
+	err = cpV3.VerifyChecksum()
+	if err == nil {
+		t.Error("V3 VerifyChecksum should have failed for corrupt checksum")
+	}
+}
+
 func removeAll(dir string, t *testing.T) {
 	t.Helper()
 	if err := os.RemoveAll(dir); err != nil {
