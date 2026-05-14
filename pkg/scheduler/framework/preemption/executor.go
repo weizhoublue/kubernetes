@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	clientset "k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	schedulinglisters "k8s.io/client-go/listers/scheduling/v1alpha2"
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/klog/v2"
 	extenderv1 "k8s.io/kube-scheduler/extender/v1"
@@ -254,7 +255,8 @@ func (e *Executor) prepareCandidateAsync(c Candidate, preemptor ExecutorPreempto
 		// this node. So, we should remove their nomination. Removing their
 		// nomination updates these pods and moves them to the active queue. It
 		// lets scheduler find another place for them sooner than after waiting for preemption completion.
-		nominatedPods := getLowerPriorityNominatedPods(e.fh, preemptor.Priority(), c.Name())
+		pgLister := e.fh.SharedInformerFactory().Scheduling().V1alpha2().PodGroups().Lister()
+		nominatedPods := getLowerPriorityNominatedPods(e.fh, preemptor.Priority(), c.Name(), pgLister)
 		if err := clearNominatedNodeName(ctx, e.fh.ClientSet(), e.fh.APICacher(), nominatedPods...); err != nil {
 			utilruntime.HandleErrorWithContext(ctx, err, "Cannot clear 'NominatedNodeName' field from lower priority pods on the same target node", "node", c.Name())
 			result = metrics.GoroutineResultError
@@ -337,7 +339,8 @@ func (e *Executor) prepareCandidate(ctx context.Context, c Candidate, preemptor 
 	// this node. So, we should remove their nomination. Removing their
 	// nomination updates these pods and moves them to the active queue. It
 	// lets scheduler find another place for them sooner than after waiting for preemption completion.
-	nominatedPods := getLowerPriorityNominatedPods(fh, preemptor.Priority(), c.Name())
+	pgLister := fh.SharedInformerFactory().Scheduling().V1alpha2().PodGroups().Lister()
+	nominatedPods := getLowerPriorityNominatedPods(fh, preemptor.Priority(), c.Name(), pgLister)
 	if err := clearNominatedNodeName(ctx, cs, fh.APICacher(), nominatedPods...); err != nil {
 		utilruntime.HandleErrorWithContext(ctx, err, "Cannot clear 'NominatedNodeName' field")
 		// We do not return as this error is not critical.
@@ -415,7 +418,7 @@ func clearNominatedNodeName(ctx context.Context, cs clientset.Interface, apiCach
 // manipulation of NodeInfo and PreFilter state per nominated pod. It may not be
 // worth the complexity, especially because we generally expect to have a very
 // small number of nominated pods per node.
-func getLowerPriorityNominatedPods(pn fwk.PodNominator, priority int32, nodeName string) []*v1.Pod {
+func getLowerPriorityNominatedPods(pn fwk.PodNominator, priority int32, nodeName string, pgLister schedulinglisters.PodGroupLister) []*v1.Pod {
 	podInfos := pn.NominatedPodsForNode(nodeName)
 
 	if len(podInfos) == 0 {
@@ -424,7 +427,11 @@ func getLowerPriorityNominatedPods(pn fwk.PodNominator, priority int32, nodeName
 
 	var lowerPriorityPods []*v1.Pod
 	for _, pi := range podInfos {
-		if corev1helpers.PodPriority(pi.GetPod()) < priority {
+		podPriority := corev1helpers.PodPriority(pi.GetPod())
+		if pg := getPodGroup(pi.GetPod(), pgLister); pg != nil {
+			podPriority = util.PodGroupPriority(pg)
+		}
+		if podPriority < priority {
 			lowerPriorityPods = append(lowerPriorityPods, pi.GetPod())
 		}
 	}
