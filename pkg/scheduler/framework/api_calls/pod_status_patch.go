@@ -73,6 +73,9 @@ func syncStatus(status *v1.PodStatus, condition []*v1.PodCondition, nominatingIn
 	nnnNeedsUpdate := nominatingInfo.Mode() == fwk.ModeOverride && status.NominatedNodeName != nominatingInfo.NominatedNodeName
 	anyUpdated := false
 	for _, cond := range condition {
+		if cond == nil {
+			continue
+		}
 		updated := podutil.UpdatePodCondition(status, cond)
 		if updated {
 			anyUpdated = true
@@ -93,6 +96,9 @@ func (psuc *PodStatusPatchCall) Execute(ctx context.Context, client clientset.In
 	psuc.executed = true
 	conditions := make([]*v1.PodCondition, 0, len(psuc.newConditions))
 	for _, condition := range psuc.newConditions {
+		if condition == nil {
+			continue
+		}
 		conditions = append(conditions, condition.DeepCopy())
 	}
 	podStatusCopy := psuc.podStatus.DeepCopy()
@@ -134,6 +140,9 @@ func (psuc *PodStatusPatchCall) Sync(obj metav1.Object) (metav1.Object, error) {
 	}
 	newConditions := make([]*v1.PodCondition, 0, len(psuc.newConditions))
 	for _, condition := range psuc.newConditions {
+		if condition == nil {
+			continue
+		}
 		newConditions = append(newConditions, condition.DeepCopy())
 	}
 	psuc.lock.Unlock()
@@ -157,15 +166,21 @@ func (psuc *PodStatusPatchCall) Merge(oldCall fwk.APICall) error {
 		psuc.nominatingInfo = oldPsuc.nominatingInfo
 	}
 	for _, cond := range oldPsuc.newConditions {
+		if cond == nil {
+			continue
+		}
 		found := false
 		for _, newCond := range psuc.newConditions {
+			if newCond == nil {
+				continue
+			}
 			if newCond.Type == cond.Type {
 				found = true
 				break
 			}
 		}
 		if !found {
-			psuc.newConditions = append(psuc.newConditions, cond)
+			psuc.newConditions = append(psuc.newConditions, cond.DeepCopy())
 		}
 	}
 	return nil
@@ -194,6 +209,9 @@ func (psuc *PodStatusPatchCall) IsNoOp() bool {
 		return false
 	}
 	for _, condition := range psuc.newConditions {
+		if condition == nil {
+			continue
+		}
 		if conditionNeedsUpdate(psuc.podStatus, condition) {
 			return false
 		}

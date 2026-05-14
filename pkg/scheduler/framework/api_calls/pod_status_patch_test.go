@@ -96,6 +96,13 @@ func TestPodStatusPatchCall_IsNoOp(t *testing.T) {
 			want:           false,
 		},
 		{
+			name:           "Nil condition in slice is skipped without panic",
+			pod:            podWithNode,
+			conditions:     []*v1.PodCondition{nil, {Type: v1.PodScheduled, Status: v1.ConditionFalse}},
+			nominatingInfo: &fwk.NominatingInfo{NominatedNodeName: "node-a", NominatingMode: fwk.ModeOverride},
+			want:           true,
+		},
+		{
 			name: "No-op when multiple conditions all match",
 			pod: &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{UID: "uid"},
@@ -175,6 +182,18 @@ func TestPodStatusPatchCall_Merge(t *testing.T) {
 		}
 		if diff := cmp.Diff(expectedConditions, newCall.newConditions); diff != "" {
 			t.Errorf("Unexpected conditions after merging (-want,+got):\n%s", diff)
+		}
+	})
+
+	t.Run("Skips nil condition in old call during merge", func(t *testing.T) {
+		oldCall := NewPodStatusPatchCall(pod, []*v1.PodCondition{nil, {Type: v1.PodScheduled, Status: v1.ConditionFalse}}, nil)
+		newCall := NewPodStatusPatchCall(pod, nil, nil)
+
+		if err := newCall.Merge(oldCall); err != nil {
+			t.Fatalf("Unexpected error returned by Merge(): %v", err)
+		}
+		if len(newCall.newConditions) != 1 || newCall.newConditions[0].Type != v1.PodScheduled {
+			t.Errorf("Expected only the non-nil PodScheduled condition to be merged, got: %v", newCall.newConditions)
 		}
 	})
 
@@ -349,6 +368,23 @@ func TestSyncStatus(t *testing.T) {
 			expectedConditions:    []v1.PodCondition{{Type: v1.PodScheduled, Status: v1.ConditionTrue}, {Type: v1.ContainersReady, Status: v1.ConditionFalse}},
 		},
 		{
+			name: "Nil condition in slice is skipped without panic",
+			oldPodStatus: &v1.PodStatus{
+				NominatedNodeName: "node-a",
+				Conditions: []v1.PodCondition{
+					{
+						Type:   v1.PodScheduled,
+						Status: v1.ConditionFalse,
+					},
+				},
+			},
+			conditions:            []*v1.PodCondition{nil, {Type: v1.ContainersReady, Status: v1.ConditionTrue}},
+			nominatingInfo:        &fwk.NominatingInfo{NominatedNodeName: "node-a", NominatingMode: fwk.ModeNoop},
+			expectUpdated:         true,
+			expectedNominatedNode: "node-a",
+			expectedConditions:    []v1.PodCondition{{Type: v1.PodScheduled, Status: v1.ConditionFalse}, {Type: v1.ContainersReady, Status: v1.ConditionTrue}},
+		},
+		{
 			name: "No-op nominating mode with different node name",
 			oldPodStatus: &v1.PodStatus{
 				NominatedNodeName: "node-a",
@@ -415,6 +451,24 @@ func TestPodStatusPatchCall_Execute(t *testing.T) {
 		}
 		if !call.executed {
 			t.Error("Expected 'executed' flag to be set during execution")
+		}
+	})
+
+	t.Run("Execute with nil condition in slice does not panic", func(t *testing.T) {
+		client := fake.NewClientset()
+		patched := false
+		client.PrependReactor("patch", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+			patched = true
+			return true, nil, nil
+		})
+
+		call := NewPodStatusPatchCall(pod, []*v1.PodCondition{nil, {Type: v1.PodScheduled, Status: v1.ConditionFalse}},
+			&fwk.NominatingInfo{NominatingMode: fwk.ModeNoop})
+		if err := call.Execute(ctx, client); err != nil {
+			t.Fatalf("Unexpected error returned by Execute(): %v", err)
+		}
+		if !patched {
+			t.Error("Expected patch API to be called")
 		}
 	})
 
