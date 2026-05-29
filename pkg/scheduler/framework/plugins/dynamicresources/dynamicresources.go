@@ -144,6 +144,27 @@ type informationForClaim struct {
 	allocation *resourceapi.AllocationResult
 }
 
+// mergeAllocationResultsInToAllocateOrder combines allocator results with pending
+// PodGroup allocations in the same order as claims.toAllocate(). Reserve and
+// computeScore rely on this ordering.
+func mergeAllocationResultsInToAllocateOrder(
+	claims claimStore,
+	informationsForClaim []informationForClaim,
+	newAllocations []resourceapi.AllocationResult,
+) []resourceapi.AllocationResult {
+	allocations := make([]resourceapi.AllocationResult, 0, len(newAllocations))
+	newAllocIndex := 0
+	for index, _ := range claims.toAllocate() {
+		if informationsForClaim[index].allocation != nil {
+			allocations = append(allocations, *informationsForClaim[index].allocation)
+			continue
+		}
+		allocations = append(allocations, newAllocations[newAllocIndex])
+		newAllocIndex++
+	}
+	return allocations
+}
+
 // nodeAllocation holds the allocation results and extended resource claim per node.
 type nodeAllocation struct {
 	// allocationResults has the allocation results, matching the order of
@@ -815,17 +836,12 @@ func (pl *DynamicResources) Filter(ctx context.Context, cs fwk.CycleState, pod *
 		// This replaces the special ResourceClaim for extended resources with one
 		// matching the node.
 		claimsToAllocate := make([]*resourceapi.ResourceClaim, 0, state.claims.len())
-		// pendingResult holds pending allocations that were made for a previous
-		// Pod in Reserve, but before that allocation is recorded in the status
-		// by PreBind.
-		var pendingResult []resourceapi.AllocationResult
 		extendedResourceClaim := state.claims.extendedResourceClaim()
 		for index, claim := range state.claims.toAllocate() {
 			if claim == extendedResourceClaim && nodeExtendedResourceClaim != nil {
 				claim = nodeExtendedResourceClaim
 			}
 			if state.informationsForClaim[index].allocation != nil {
-				pendingResult = append(pendingResult, *state.informationsForClaim[index].allocation)
 				continue
 			}
 			claimsToAllocate = append(claimsToAllocate, claim)
@@ -879,8 +895,7 @@ func (pl *DynamicResources) Filter(ctx context.Context, cs fwk.CycleState, pod *
 				return status
 			}
 		}
-		// Reserve uses this information.
-		allocations = append(allocationResult, pendingResult...)
+		allocations = mergeAllocationResultsInToAllocateOrder(state.claims, state.informationsForClaim, allocationResult)
 	}
 
 	// Store information in state while holding the mutex.

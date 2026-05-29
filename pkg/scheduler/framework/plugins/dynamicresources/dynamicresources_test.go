@@ -4702,6 +4702,27 @@ func Test_computesScore(t *testing.T) {
 	}
 }
 
+func Test_mergeAllocationResultsInToAllocateOrder(t *testing.T) {
+	claims := newClaimStore([]*resourceapi.ResourceClaim{pendingClaim, pendingClaim2}, nil, nil)
+	infos := []informationForClaim{
+		{allocation: allocationResult},
+		{},
+	}
+	newAllocations := []resourceapi.AllocationResult{*allocationResult2}
+
+	got := mergeAllocationResultsInToAllocateOrder(claims, infos, newAllocations)
+	want := []resourceapi.AllocationResult{*allocationResult, *allocationResult2}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("unexpected allocation order (-want +got):\n%s", diff)
+	}
+
+	// Old merge order put new allocations before pending ones.
+	wrongOrder := append(slices.Clone(newAllocations), *allocationResult)
+	if diff := cmp.Diff(wrongOrder, got); diff == "" {
+		t.Fatal("got the old incorrect merge order")
+	}
+}
+
 func TestNormalizeScore(t *testing.T) {
 	testcases := map[string]struct {
 		scores         fwk.NodeScoreList
