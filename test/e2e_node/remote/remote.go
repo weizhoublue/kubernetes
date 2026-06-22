@@ -34,7 +34,7 @@ var testTimeout = CommandLine.Duration("test-timeout", 45*time.Minute, "How long
 var resultsDir = CommandLine.String("results-dir", defaultResultsDir(), "Directory to scp test results to.")
 
 func defaultResultsDir() string {
-	if artifacts, ok := os.LookupEnv("ARTIFACTS"); ok {
+	if artifacts := os.Getenv("ARTIFACTS"); artifacts != "" {
 		return artifacts
 	}
 	return "/tmp"

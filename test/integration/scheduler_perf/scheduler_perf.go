@@ -621,7 +621,8 @@ var specialFilenameChars = regexp.MustCompile(`[^a-zA-Z0-9-_]`)
 
 func setupTestCase(t testing.TB, tc *testCase, featureGates map[featuregate.Feature]bool, workload *Workload, opts *schedulerPerfOptions) (*scheduler.Scheduler, informers.SharedInformerFactory, <-chan struct{}, ktesting.TContext) {
 	tCtx := ktesting.Init(t, initoption.PerTestOutput(UseTestingLog))
-	artifacts, doArtifacts := os.LookupEnv("ARTIFACTS")
+	artifacts := os.Getenv("ARTIFACTS")
+	doArtifacts := artifacts != ""
 	if !UseTestingLog && doArtifacts {
 		// Reconfigure logging so that it goes to a separate file per
 		// test instead of stderr. If the test passes, the file gets

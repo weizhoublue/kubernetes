@@ -135,7 +135,7 @@ func (c *Cluster) Start(tCtx ktesting.TContext, state string, bindir string, loc
 	tCtx.Helper()
 	c.Stop(tCtx)
 
-	if artifacts, ok := os.LookupEnv("ARTIFACTS"); ok {
+	if artifacts := os.Getenv("ARTIFACTS"); artifacts != "" {
 		// Sanitize the name:
 		// - remove E2E [] tags
 		// - replace whitespaces and some special characters with hyphens
