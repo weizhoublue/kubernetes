@@ -403,8 +403,13 @@ func (t *unstructuredSetList) Add(other ref.Val) ref.Val {
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(other)
 	}
-	elements := t.elements
-	set := t.getSet()
+	otherSz, _ := oSetList.Size().(types.Int)
+	elements := make([]interface{}, len(t.elements), len(t.elements)+int(otherSz))
+	set := make(map[interface{}]struct{}, len(t.elements))
+	for i, e := range t.elements {
+		elements[i] = e
+		set[e] = struct{}{}
+	}
 	for it := oSetList.Iterator(); it.HasNext() == types.True; {
 		next := it.Next().Value()
 		if _, ok := set[next]; !ok {
@@ -489,7 +494,9 @@ func (t *unstructuredList) Add(other ref.Val) ref.Val {
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(other)
 	}
-	elements := t.elements
+	otherSz, _ := oList.Size().(types.Int)
+	elements := make([]interface{}, len(t.elements), len(t.elements)+int(otherSz))
+	copy(elements, t.elements)
 	for it := oList.Iterator(); it.HasNext() == types.True; {
 		next := it.Next().Value()
 		elements = append(elements, next)
