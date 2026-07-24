@@ -487,7 +487,7 @@ func (kl *Kubelet) GetAllocatedPods() ([]*v1.Pod, error) {
 }
 
 // GetAllocatedPodByName returns the allocated pod with the given namespace and name.
-// It returns (nil, nil) if the pod is not found or is inactive.
+// It returns (nil, nil) if the pod is not found, inactive, or has no allocation.
 func (kl *Kubelet) GetAllocatedPodByName(namespace, name string) (*v1.Pod, error) {
 	pod, found := kl.GetPodByName(namespace, name)
 	if !found {
@@ -495,6 +495,9 @@ func (kl *Kubelet) GetAllocatedPodByName(namespace, name string) (*v1.Pod, error
 	}
 	activePods := kl.filterOutInactivePods([]*v1.Pod{pod})
 	if len(activePods) == 0 {
+		return nil, nil
+	}
+	if !kl.allocationManager.HasPodAllocatedResources(pod.UID) {
 		return nil, nil
 	}
 	allocatedPod, _ := kl.allocationManager.UpdatePodFromAllocation(pod)

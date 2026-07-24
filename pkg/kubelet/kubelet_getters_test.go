@@ -138,6 +138,25 @@ func TestHandlerSupportsUserNamespaces(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestGetAllocatedPodByNameWithoutAllocation(t *testing.T) {
+	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
+	defer testKubelet.Cleanup()
+	kubelet := testKubelet.kubelet
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod",
+			Namespace: "namespace",
+			UID:       "uid",
+		},
+	}
+	kubelet.podManager.AddPod(pod)
+
+	allocatedPod, err := kubelet.GetAllocatedPodByName(pod.Namespace, pod.Name)
+
+	assert.NoError(t, err)
+	assert.Nil(t, allocatedPod)
+}
+
 func Test_getLastObservedNodeAddresses(t *testing.T) {
 	testCases := []struct {
 		name                  string
