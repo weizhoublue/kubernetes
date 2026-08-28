@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"maps"
+	"net"
 	"reflect"
 	"sync"
 
@@ -115,12 +116,12 @@ type UpdateServiceMapResult struct {
 	// UpdatedServices lists the names of all services added/updated/deleted since the
 	// last Update.
 	UpdatedServices sets.Set[types.NamespacedName]
-	// DeletedServices holds all the ServicePorts removed since the last Update,
-	// either because their Service was deleted or because the port was removed
-	// from it. Callers can use this to clean up stale state (e.g. conntrack
-	// entries for deleted UDP services).
+	// DeletedServices holds the previous value of every ServicePort whose
+	// frontends were removed or changed since the last Update. Callers can use
+	// this to clean up stale state (e.g. conntrack entries for old UDP service
+	// frontends).
 	DeletedServices ServicePortMap
-	// ConntrackCleanupRequired will be true if any UDP ServicePort was deleted, false otherwise.
+	// ConntrackCleanupRequired will be true if any UDP ServicePort frontend was removed or changed, false otherwise.
 	// It's used to minimise conntrack cleanup calls.
 	ConntrackCleanupRequired bool
 }
@@ -190,23 +191,23 @@ func (sm ServicePortMap) Update(sct *ServiceChangeTracker) UpdateServiceMapResul
 		result.UpdatedServices.Insert(nn)
 
 		sm.merge(change.current)
+		for svcPortName, previous := range change.previous {
+			current, exists := change.current[svcPortName]
+			if exists && servicePortFrontendsChanged(previous, current) {
+				result.DeletedServices[svcPortName] = previous
+			}
+		}
 		// filter out the Update event of current changes from previous changes
 		// before calling unmerge() so that can skip deleting the Update events.
 		change.previous.filter(change.current)
 		maps.Copy(result.DeletedServices, change.previous)
 		sm.unmerge(change.previous)
+	}
 
-		// result.ConntrackCleanupRequired should be true if any one of the deleted
-		// ServicePorts is UDP. Once true, we don't update the value.
-		if result.ConntrackCleanupRequired {
-			continue
-		}
-		// Check if the deleted service had any UDP ServicePort
-		for svcPort := range change.previous {
-			if svcPort.Protocol == v1.ProtocolUDP {
-				result.ConntrackCleanupRequired = true
-				break
-			}
+	for svcPort := range result.DeletedServices {
+		if svcPort.Protocol == v1.ProtocolUDP {
+			result.ConntrackCleanupRequired = true
+			break
 		}
 	}
 	// clear changes after applying them to ServicePortMap.
@@ -214,6 +215,28 @@ func (sm ServicePortMap) Update(sct *ServiceChangeTracker) UpdateServiceMapResul
 	metrics.ServiceChangesPending.Set(0)
 
 	return result
+}
+
+func servicePortFrontendsChanged(previous, current ServicePort) bool {
+	if previous.Port() != current.Port() || !previous.ClusterIP().Equal(current.ClusterIP()) {
+		return true
+	}
+	if !ipSlicesEqual(previous.LoadBalancerVIPs(), current.LoadBalancerVIPs()) {
+		return true
+	}
+	return !ipSlicesEqual(previous.ExternalIPs(), current.ExternalIPs())
+}
+
+func ipSlicesEqual(previous, current []net.IP) bool {
+	previousIPs := sets.New[string]()
+	for _, ip := range previous {
+		previousIPs.Insert(ip.String())
+	}
+	currentIPs := sets.New[string]()
+	for _, ip := range current {
+		currentIPs.Insert(ip.String())
+	}
+	return previousIPs.Equal(currentIPs)
 }
 
 // merge adds other ServicePortMap's elements to current ServicePortMap.

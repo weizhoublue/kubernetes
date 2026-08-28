@@ -973,6 +973,92 @@ func TestUpdateDeletedServices(t *testing.T) {
 	})
 }
 
+func TestUpdateChangedServiceFrontends(t *testing.T) {
+	testCases := []struct {
+		name             string
+		update           func(*v1.Service)
+		wantPreviousPort int
+		wantCurrentPort  int
+		wantPreviousVIPs []net.IP
+		wantCurrentVIPs  []net.IP
+	}{
+		{
+			name: "load balancer VIP replaced",
+			update: func(svc *v1.Service) {
+				svc.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{IP: "10.1.2.5"}}
+			},
+			wantPreviousPort: 1234,
+			wantCurrentPort:  1234,
+			wantPreviousVIPs: makeIPs("10.1.2.4"),
+			wantCurrentVIPs:  makeIPs("10.1.2.5"),
+		},
+		{
+			name: "load balancer VIP removed",
+			update: func(svc *v1.Service) {
+				svc.Status.LoadBalancer.Ingress = nil
+			},
+			wantPreviousPort: 1234,
+			wantCurrentPort:  1234,
+			wantPreviousVIPs: makeIPs("10.1.2.4"),
+		},
+		{
+			name: "service port changed",
+			update: func(svc *v1.Service) {
+				svc.Spec.Ports[0].Port = 1235
+			},
+			wantPreviousPort: 1234,
+			wantCurrentPort:  1235,
+			wantPreviousVIPs: makeIPs("10.1.2.4"),
+			wantCurrentVIPs:  makeIPs("10.1.2.4"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := newFakeProxier(v1.IPv4Protocol, time.Time{})
+			oldService := makeTestService("ns1", "udp-svc", func(svc *v1.Service) {
+				svc.Spec.Type = v1.ServiceTypeLoadBalancer
+				svc.Spec.ClusterIP = "172.16.55.4"
+				svc.Spec.Ports = addTestPort(svc.Spec.Ports, "p1", "UDP", 1234, 4321, 0)
+				svc.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{IP: "10.1.2.4"}}
+			})
+			newService := oldService.DeepCopy()
+			tc.update(newService)
+			portName := makeServicePortName("ns1", "udp-svc", "p1", v1.ProtocolUDP)
+
+			fp.addService(oldService)
+			fp.svcPortMap.Update(fp.serviceChanges)
+			fp.updateService(oldService, newService)
+			result := fp.svcPortMap.Update(fp.serviceChanges)
+
+			if !result.ConntrackCleanupRequired {
+				t.Fatal("expected conntrack cleanup required")
+			}
+			deletedService, exists := result.DeletedServices[portName]
+			if !exists {
+				t.Fatalf("expected previous service frontend for %q", portName)
+			}
+			if deletedService.Port() != tc.wantPreviousPort {
+				t.Errorf("expected previous service port %d, got %d", tc.wantPreviousPort, deletedService.Port())
+			}
+			if !reflect.DeepEqual(deletedService.LoadBalancerVIPs(), tc.wantPreviousVIPs) {
+				t.Errorf("expected previous load balancer VIPs %v, got %v", tc.wantPreviousVIPs, deletedService.LoadBalancerVIPs())
+			}
+
+			currentService, exists := fp.svcPortMap[portName]
+			if !exists {
+				t.Fatalf("expected current service for %q", portName)
+			}
+			if currentService.Port() != tc.wantCurrentPort {
+				t.Errorf("expected current service port %d, got %d", tc.wantCurrentPort, currentService.Port())
+			}
+			if !reflect.DeepEqual(currentService.LoadBalancerVIPs(), tc.wantCurrentVIPs) {
+				t.Errorf("expected current load balancer VIPs %v, got %v", tc.wantCurrentVIPs, currentService.LoadBalancerVIPs())
+			}
+		})
+	}
+}
+
 func TestServiceCacheLeaks(t *testing.T) {
 	fp := newFakeProxier(v1.IPv4Protocol, time.Time{})
 
