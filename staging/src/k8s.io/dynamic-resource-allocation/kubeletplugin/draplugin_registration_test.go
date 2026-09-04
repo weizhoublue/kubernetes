@@ -111,6 +111,14 @@ func TestRollingUpdateRegistrarSocketFile_respectsCustomRegistryDir(t *testing.T
 	}
 }
 
+func TestRollingUpdateRegistrarSocketFile_rejectsTooLongRegistryDir(t *testing.T) {
+	registryDir := "/" + strings.Repeat("x", unixPathMax)
+	got := RollingUpdateRegistrarSocketFile(registryDir, "example.com/driver", "11111111-2222-3333-4444-555555555555")
+	if got != "" {
+		t.Fatalf("expected no valid registration socket filename, got %q", got)
+	}
+}
+
 func TestRollingUpdateRegistrarSocketFile_deterministic(t *testing.T) {
 	driver := "example.com/driver"
 	podUID := types.UID("11111111-2222-3333-4444-555555555555")

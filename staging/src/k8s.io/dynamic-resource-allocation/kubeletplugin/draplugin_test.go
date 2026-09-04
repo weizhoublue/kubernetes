@@ -18,6 +18,7 @@ package kubeletplugin
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +98,19 @@ func TestStartWithoutDRAAPI(t *testing.T) {
 		NodeV1beta1(false),
 	)
 	require.ErrorContains(t, err, "no supported DRA gRPC API")
+}
+
+func TestStartRollingUpdateWithTooLongRegistrarDirectory(t *testing.T) {
+	registrarDirectory := "/" + strings.Repeat("x", unixPathMax)
+	_, err := Start(t.Context(), &stubPlugin{},
+		DriverName("test-driver"),
+		KubeClient(fake.NewClientset()),
+		RegistrarDirectoryPath(registrarDirectory),
+		RollingUpdate("11111111-2222-3333-4444-555555555555"),
+		DRAService(false),
+	)
+	require.ErrorContains(t, err, "configure a shorter directory")
+	require.ErrorContains(t, err, registrarDirectory)
 }
 
 // fakeHealthStream captures the responses sent by the helper's gRPC bridge.

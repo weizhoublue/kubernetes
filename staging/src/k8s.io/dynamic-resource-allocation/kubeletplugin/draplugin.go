@@ -80,6 +80,8 @@ const (
 //  1. <driver name>-<pod UID>-reg.sock
 //  2. <driver name>-<base64(SHA-256(pod UID)[:8])>-reg.sock
 //  3. dra-<base64(SHA-256(driver name, NUL, pod UID)[:16])>-reg.sock
+//
+// It returns an empty string when none of the candidates fit.
 func RollingUpdateRegistrarSocketFile(registryDir, driverName string, podUID types.UID) string {
 	uid := string(podUID)
 	uidHash := sha256Sum(uid)
@@ -94,7 +96,7 @@ func RollingUpdateRegistrarSocketFile(registryDir, driverName string, podUID typ
 			return basename
 		}
 	}
-	return candidates[len(candidates)-1]
+	return ""
 }
 
 func sha256Sum(data string) [32]byte {
@@ -929,6 +931,9 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 	if o.pluginRegistrationEndpoint.file == "" {
 		if o.rollingUpdateUID != "" {
 			o.pluginRegistrationEndpoint.file = RollingUpdateRegistrarSocketFile(o.pluginRegistrationEndpoint.dir, o.driverName, o.rollingUpdateUID)
+			if o.pluginRegistrationEndpoint.file == "" && o.registrationService {
+				return nil, fmt.Errorf("registrar directory %q is too long for rolling updates: configure a shorter directory so the registration socket path is less than %d bytes", o.pluginRegistrationEndpoint.dir, unixPathMax)
+			}
 		} else {
 			o.pluginRegistrationEndpoint.file = o.driverName + "-reg.sock"
 		}
