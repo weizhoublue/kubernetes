@@ -123,7 +123,7 @@ func NewCmdKubeRCSet(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVar(&o.Section, "section", o.Section, "Section to modify: 'defaults', 'aliases', or 'credentialplugin'")
 	cmd.MarkFlagRequired("section") // nolint:errcheck
 	cmd.Flags().StringVar(&o.Command, "command", o.Command, "Command to configure (e.g., 'get', 'create', 'set env')")
-	cmd.Flags().StringVar(&o.AliasName, "name", o.AliasName, "Alias name (required for --section=aliases)")
+	cmd.Flags().StringVar(&o.AliasName, "name", o.AliasName, "Alias name (ASCII letters only, required for --section=aliases)")
 	cmd.Flags().StringVar(&o.PluginPolicy, "policy", o.PluginPolicy, "Plugin policy to use for exec credential plugins, must be one of 'AllowAll', 'DenyAll' or 'Allowlist'")
 	cmd.Flags().StringArrayVar(&o.Options, "option", o.Options, "Flag option in the form flag=value (can be specified multiple times)")
 	cmd.Flags().StringArrayVar(&o.PrependArgs, "prependarg", o.PrependArgs, "Argument to prepend to the command (can be specified multiple times, for aliases only)")
@@ -159,8 +159,13 @@ func (o *SetOptions) Validate() error {
 		return fmt.Errorf("--section must be %q, %q, or %q, got: %s", sectionDefaults, sectionAliases, sectionCredentialPlugin, o.Section)
 	}
 
-	if o.Section == sectionAliases && o.AliasName == "" {
-		return fmt.Errorf("--name is required when --section=%s", sectionAliases)
+	if o.Section == sectionAliases {
+		if o.AliasName == "" {
+			return fmt.Errorf("--name is required when --section=%s", sectionAliases)
+		}
+		if err := kuberc.ValidateAliasName(o.AliasName); err != nil {
+			return err
+		}
 	}
 
 	if o.Section == sectionDefaults && o.AliasName != "" {

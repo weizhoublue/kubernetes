@@ -500,6 +500,14 @@ func searchInArgs(flagName string, shorthand string, allShorthands map[string]st
 	return false
 }
 
+// ValidateAliasName validates that an alias name contains only ASCII letters.
+func ValidateAliasName(name string) error {
+	if !aliasNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid alias name, can only include alphabetical characters")
+	}
+	return nil
+}
+
 func (p *Preferences) validate(plugin *config.Preference) error {
 	validateFlag := func(flags []config.CommandOptionDefault) error {
 		for _, flag := range flags {
@@ -511,8 +519,8 @@ func (p *Preferences) validate(plugin *config.Preference) error {
 	}
 	aliases := make(map[string]struct{})
 	for _, alias := range plugin.Aliases {
-		if !aliasNameRegex.MatchString(alias.Name) {
-			return fmt.Errorf("invalid alias name, can only include alphabetical characters")
+		if err := ValidateAliasName(alias.Name); err != nil {
+			return err
 		}
 
 		if err := validateFlag(alias.Options); err != nil {
