@@ -26,9 +26,124 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
+	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/config/v1beta1"
 	"sigs.k8s.io/yaml"
 )
+
+func TestSetOptions_Validate_AliasName(t *testing.T) {
+	tests := []struct {
+		name          string
+		aliasName     string
+		errorContains string
+	}{
+		{name: "lowercase", aliasName: "getpods"},
+		{name: "uppercase", aliasName: "GETPODS"},
+		{name: "mixed case", aliasName: "GetPods"},
+		{name: "single letter", aliasName: "g"},
+		{name: "empty", errorContains: "--name is required"},
+		{name: "hyphen", aliasName: "get-pods", errorContains: "invalid alias name"},
+		{name: "underscore", aliasName: "get_pods", errorContains: "invalid alias name"},
+		{name: "digit", aliasName: "getpods1", errorContains: "invalid alias name"},
+		{name: "space", aliasName: "get pods", errorContains: "invalid alias name"},
+		{name: "non-ASCII letter", aliasName: "getp\u00f3ds", errorContains: "invalid alias name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := &SetOptions{
+				KubeRCFile: "kuberc",
+				Section:    sectionAliases,
+				AliasName:  tt.aliasName,
+				Command:    "get",
+			}
+			err := o.Validate()
+			if tt.errorContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errorContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errorContains, err)
+				}
+			} else if err != nil {
+				t.Fatalf("Validate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewCmdKubeRCSet_InvalidAliasName(t *testing.T) {
+	const existingKuberc = `apiVersion: kubectl.config.k8s.io/v1beta1
+kind: Preference
+aliases:
+- name: getpods
+  command: get
+  prependArgs:
+  - pods
+`
+	tests := []struct {
+		name           string
+		existingKuberc string
+		overwrite      bool
+	}{
+		{name: "new file"},
+		{name: "existing file", existingKuberc: existingKuberc},
+		{name: "existing file with overwrite", existingKuberc: existingKuberc, overwrite: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kubercPath := filepath.Join(t.TempDir(), "kuberc")
+			if tt.existingKuberc != "" {
+				if err := os.WriteFile(kubercPath, []byte(tt.existingKuberc), 0644); err != nil {
+					t.Fatalf("failed to write existing kuberc file: %v", err)
+				}
+			}
+
+			streams, _, out, _ := genericiooptions.NewTestIOStreams()
+			cmd := NewCmdKubeRCSet(streams)
+			args := []string{"--kuberc", kubercPath, "--section", "aliases", "--name", "get-pods", "--command", "get", "--prependarg", "pods"}
+			if tt.overwrite {
+				args = append(args, "--overwrite")
+			}
+			cmd.SetArgs(args)
+
+			var fatalMessage string
+			cmdutil.BehaviorOnFatal(func(msg string, code int) {
+				fatalMessage = msg
+				panic(msg)
+			})
+			defer cmdutil.DefaultBehaviorOnFatal()
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil && recovered != fatalMessage {
+						t.Fatalf("unexpected panic: %v", recovered)
+					}
+				}()
+				if err := cmd.Execute(); err != nil {
+					t.Fatalf("Execute() unexpected error: %v", err)
+				}
+			}()
+
+			if !strings.Contains(fatalMessage, "invalid alias name") {
+				t.Errorf("expected invalid alias name error, got: %q", fatalMessage)
+			}
+			if out.Len() != 0 {
+				t.Errorf("expected no success output, got: %s", out.String())
+			}
+			data, err := os.ReadFile(kubercPath)
+			if tt.existingKuberc == "" {
+				if !os.IsNotExist(err) {
+					t.Fatalf("expected kuberc file not to be created, got error: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("failed to read existing kuberc file: %v", err)
+				}
+				if string(data) != tt.existingKuberc {
+					t.Errorf("kuberc file changed after invalid alias name")
+				}
+			}
+		})
+	}
+}
 
 func TestSetOptions_Run_Defaults(t *testing.T) {
 	tests := []struct {
