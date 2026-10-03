@@ -47,6 +47,7 @@ var (
 		Set values in the kuberc configuration file.
 
 		Use --section to specify whether to set defaults or aliases.
+		Use full flag names in --option (e.g., output=yaml, not o=yaml).
 
 		For defaults: Sets default flag values for kubectl commands. The --command flag
 		should specify only the command (e.g., "get", "create", "set env"), not resources.
@@ -125,7 +126,7 @@ func NewCmdKubeRCSet(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVar(&o.Command, "command", o.Command, "Command to configure (e.g., 'get', 'create', 'set env')")
 	cmd.Flags().StringVar(&o.AliasName, "name", o.AliasName, "Alias name (required for --section=aliases)")
 	cmd.Flags().StringVar(&o.PluginPolicy, "policy", o.PluginPolicy, "Plugin policy to use for exec credential plugins, must be one of 'AllowAll', 'DenyAll' or 'Allowlist'")
-	cmd.Flags().StringArrayVar(&o.Options, "option", o.Options, "Flag option in the form flag=value (can be specified multiple times)")
+	cmd.Flags().StringArrayVar(&o.Options, "option", o.Options, "Flag option in the form flag=value, using the full flag name rather than shorthand (can be specified multiple times)")
 	cmd.Flags().StringArrayVar(&o.PrependArgs, "prependarg", o.PrependArgs, "Argument to prepend to the command (can be specified multiple times, for aliases only)")
 	cmd.Flags().StringArrayVar(&o.AppendArgs, "appendarg", o.AppendArgs, "Argument to append to the command (can be specified multiple times, for aliases only)")
 	cmd.Flags().StringArrayVar(&o.AllowlistEntries, "allowlist-entry", o.AllowlistEntries, "Allowlist entry the form field=value (can be specified multiple times)")
@@ -146,6 +147,33 @@ func (o *SetOptions) Complete(cmd *cobra.Command) error {
 	}
 
 	o.KubeRCFile = kubeRCFile
+	if (o.Section != sectionDefaults && o.Section != sectionAliases) || o.Command == "" {
+		return nil
+	}
+
+	options, err := o.parseOptions()
+	if err != nil {
+		return err
+	}
+	for _, option := range options {
+		if len(option.Name) != 1 {
+			continue
+		}
+		command, _, err := cmd.Root().Find(strings.Fields(o.Command))
+		if err != nil {
+			return fmt.Errorf("cannot validate option %q for command %q: %w", option.Name, o.Command, err)
+		}
+
+		// Merge inherited flags before checking their shorthands.
+		_ = command.InheritedFlags()
+		if command.Flag(option.Name) != nil {
+			continue
+		}
+		if flag := command.Flags().ShorthandLookup(option.Name); flag != nil {
+			return fmt.Errorf("option %q is a shorthand flag for command %q; use the full flag name %q instead", option.Name, o.Command, flag.Name)
+		}
+		return fmt.Errorf("invalid option %q for command %q; use a full flag name rather than shorthand", option.Name, o.Command)
+	}
 	return nil
 }
 

@@ -17,18 +17,146 @@ limitations under the License.
 package kuberc
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/spf13/cobra"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/kubectl/pkg/config/v1beta1"
 	"sigs.k8s.io/yaml"
 )
+
+func TestSetOptions_ShorthandOptions(t *testing.T) {
+	tests := []struct {
+		name          string
+		command       string
+		option        string
+		expectedName  string
+		errorContains string
+	}{
+		{name: "bare shorthand", command: "get", option: "o=yaml", errorContains: `use the full flag name "output"`},
+		{name: "single dash shorthand", command: "get", option: "-o=yaml", errorContains: `use the full flag name "output"`},
+		{name: "double dash shorthand", command: "get", option: "--o=yaml", errorContains: `use the full flag name "output"`},
+		{name: "inherited shorthand", command: "get", option: "-n=test", errorContains: `use the full flag name "namespace"`},
+		{name: "subcommand shorthand", command: "set env", option: "-o=yaml", errorContains: `use the full flag name "output"`},
+		{name: "uninitialized help shorthand", command: "get", option: "-h=true", errorContains: "use a full flag name rather than shorthand"},
+		{name: "full name", command: "get", option: "output=yaml", expectedName: "output"},
+		{name: "single dash full name", command: "get", option: "-output=yaml", expectedName: "output"},
+		{name: "double dash full name", command: "get", option: "--output=yaml", expectedName: "output"},
+		{name: "inherited full name", command: "get", option: "namespace=test", expectedName: "namespace"},
+		{name: "single character full name", command: "get", option: "v=2", expectedName: "v"},
+		{name: "double dash single character full name", command: "get", option: "--v=2", expectedName: "v"},
+	}
+
+	for _, section := range []string{sectionDefaults, sectionAliases} {
+		for _, existing := range []bool{false, true} {
+			for _, tt := range tests {
+				t.Run(fmt.Sprintf("%s/existing=%t/%s", section, existing, tt.name), func(t *testing.T) {
+					kubercPath := filepath.Join(t.TempDir(), "kuberc")
+					original := []byte(`apiVersion: kubectl.config.k8s.io/v1beta1
+kind: Preference
+defaults:
+- command: get
+  options:
+  - name: output
+    default: wide
+aliases:
+- name: getn
+  command: get
+  options:
+  - name: output
+    default: wide
+`)
+					if existing {
+						if err := os.WriteFile(kubercPath, original, 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+
+					streams, _, out, _ := genericiooptions.NewTestIOStreams()
+					root := &cobra.Command{Use: "kubectl"}
+					root.PersistentFlags().StringP("namespace", "n", "", "")
+					root.PersistentFlags().Int("v", 0, "")
+					get := &cobra.Command{Use: "get"}
+					get.Flags().StringP("output", "o", "", "")
+					set := &cobra.Command{Use: "set"}
+					env := &cobra.Command{Use: "env"}
+					env.Flags().StringP("output", "o", "", "")
+					set.AddCommand(env)
+					setCmd := NewCmdKubeRCSet(streams)
+					root.AddCommand(get, set, setCmd)
+
+					o := NewSetOptions(streams)
+					o.KubeRCFile = kubercPath
+					o.Section = section
+					o.Command = tt.command
+					o.Options = []string{tt.option}
+					o.Overwrite = true
+					if section == sectionAliases {
+						o.AliasName = "getn"
+					}
+
+					err := o.Complete(setCmd)
+					if err == nil {
+						err = o.Validate()
+					}
+					if err == nil {
+						err = o.Run()
+					}
+					if tt.errorContains != "" {
+						if err == nil || !strings.Contains(err.Error(), tt.errorContains) {
+							t.Errorf("expected error containing %q, got %v", tt.errorContains, err)
+						}
+						data, readErr := os.ReadFile(kubercPath)
+						if existing {
+							if readErr != nil {
+								t.Fatal(readErr)
+							}
+							if string(data) != string(original) {
+								t.Errorf("kuberc changed after rejecting shorthand: %s", data)
+							}
+						} else if !os.IsNotExist(readErr) {
+							t.Errorf("expected no kuberc file after rejecting shorthand, got error %v", readErr)
+						}
+						if out.Len() != 0 {
+							t.Errorf("unexpected success output: %s", out.String())
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := os.ReadFile(kubercPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var pref v1beta1.Preference
+					if err := yaml.Unmarshal(data, &pref); err != nil {
+						t.Fatal(err)
+					}
+					var options []v1beta1.CommandOptionDefault
+					if section == sectionDefaults {
+						options = pref.Defaults[0].Options
+					} else {
+						options = pref.Aliases[0].Options
+					}
+					expected := []v1beta1.CommandOptionDefault{
+						{Name: tt.expectedName, Default: strings.SplitN(tt.option, "=", 2)[1]},
+					}
+					if diff := cmp.Diff(expected, options); diff != "" {
+						t.Errorf("saved options mismatch (-expected +got):\n%s", diff)
+					}
+				})
+			}
+		}
+	}
+}
 
 func TestSetOptions_Run_Defaults(t *testing.T) {
 	tests := []struct {
