@@ -18,10 +18,56 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+run_kuberc_shorthand_tests() {
+  set -o nounset
+  set -o errexit
+
+  local kuberc_file before_file option output_message
+  kube::log::status "Testing kuberc shorthand flag validation"
+
+  kuberc_file="$(mktemp "${TMPDIR:-/tmp}/kuberc-shorthand.XXXXXX")"
+  before_file="${kuberc_file}.before"
+  cat > "${kuberc_file}" << EOF
+apiVersion: kubectl.config.k8s.io/v1beta1
+kind: Preference
+EOF
+
+  kubectl kuberc set --kuberc="${kuberc_file}" --section=defaults --command=get --option=output=wide
+  kubectl kuberc set --kuberc="${kuberc_file}" --section=aliases --name=getns --command=get --prependarg=namespace --option=output=wide
+  cp "${kuberc_file}" "${before_file}"
+
+  # A valid option before a shorthand must not cause a partial update.
+  for option in o=yaml -o=yaml --o=yaml; do
+    output_message=$(! kubectl kuberc set --kuberc="${kuberc_file}" --section=defaults --command=get --option=namespace=default --option="${option}" --overwrite 2>&1)
+    kube::test::if_has_string "${output_message}" 'use the full flag name "output"'
+    cmp "${before_file}" "${kuberc_file}"
+
+    output_message=$(! kubectl kuberc set --kuberc="${kuberc_file}" --section=aliases --name=getns --command=get --option=namespace=default --option="${option}" --overwrite 2>&1)
+    kube::test::if_has_string "${output_message}" 'use the full flag name "output"'
+    cmp "${before_file}" "${kuberc_file}"
+  done
+
+  kubectl kuberc set --kuberc="${kuberc_file}" --section=defaults --command=get --option=output=yaml --overwrite
+  output_message=$(kubectl get namespace default --kuberc="${kuberc_file}")
+  kube::test::if_has_string "${output_message}" 'kind: Namespace'
+  output_message=$(kubectl get namespace default -o json --kuberc="${kuberc_file}")
+  kube::test::if_has_string "${output_message}" '"kind": "Namespace"'
+
+  kubectl kuberc set --kuberc="${kuberc_file}" --section=defaults --command=get --option=output=wide --overwrite
+  kubectl kuberc set --kuberc="${kuberc_file}" --section=aliases --name=getns --command=get --option=output=yaml --overwrite
+  output_message=$(kubectl getns default --kuberc="${kuberc_file}")
+  kube::test::if_has_string "${output_message}" 'kind: Namespace'
+  output_message=$(kubectl getns default -o json --kuberc="${kuberc_file}")
+  kube::test::if_has_string "${output_message}" '"kind": "Namespace"'
+
+  rm "${kuberc_file}" "${before_file}"
+}
+
 run_kuberc_tests() {
   set -o nounset
   set -o errexit
 
+  run_kuberc_shorthand_tests
   create_and_use_new_namespace
   kube::log::status "Testing kubectl kuberc set commands"
 
