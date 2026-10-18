@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -217,11 +218,85 @@ func (g *grpcProxier) proxy(ctx context.Context, addr string) (net.Conn, error) 
 type grpcConn struct {
 	net.Conn
 	cancel context.CancelCauseFunc
+
+	writeMu       sync.Mutex
+	writeDeadline time.Time
+	writeTimer    *time.Timer
+	writers       int
+	writeErr      error
+}
+
+func (g *grpcConn) Write(b []byte) (int, error) {
+	g.writeMu.Lock()
+	err := g.writeErr
+	if err == nil && !g.writeDeadline.IsZero() && !time.Now().Before(g.writeDeadline) {
+		err = os.ErrDeadlineExceeded
+	}
+	if err != nil {
+		g.writeMu.Unlock()
+		return 0, err
+	}
+	g.writers++
+	g.writeMu.Unlock()
+
+	n, err := g.Conn.Write(b)
+	g.writeMu.Lock()
+	g.writers--
+	if err != nil && g.writeErr != nil {
+		err = g.writeErr
+	}
+	g.writeMu.Unlock()
+	return n, err
+}
+
+func (g *grpcConn) SetWriteDeadline(t time.Time) error {
+	g.writeMu.Lock()
+	defer g.writeMu.Unlock()
+	if g.writeErr != nil {
+		return g.writeErr
+	}
+	g.writeDeadline = t
+	if g.writeTimer != nil {
+		g.writeTimer.Stop()
+		g.writeTimer = nil
+	}
+	if !t.IsZero() {
+		g.writeTimer = time.AfterFunc(time.Until(t), func() {
+			g.writeMu.Lock()
+			defer g.writeMu.Unlock()
+			if g.writers > 0 && !g.writeDeadline.IsZero() && !time.Now().Before(g.writeDeadline) {
+				if g.writeErr == nil {
+					g.writeErr = os.ErrDeadlineExceeded
+				}
+				// A single-use tunnel cannot interrupt an individual gRPC Send.
+				g.cancel(os.ErrDeadlineExceeded)
+			}
+		})
+	}
+	return nil
 }
 
 func (g *grpcConn) Close() error {
+	g.writeMu.Lock()
+	if g.writeErr == nil {
+		g.writeErr = net.ErrClosed
+	}
+	g.writeMu.Unlock()
+
+	// Bound sending the close notification as well as waiting for its response.
+	closeTimer := time.AfterFunc(client.CloseTimeout, func() {
+		g.cancel(context.DeadlineExceeded)
+	})
+	defer closeTimer.Stop()
+
 	err := g.Conn.Close()
 	g.cancel(err)
+	g.writeMu.Lock()
+	if g.writeTimer != nil {
+		g.writeTimer.Stop()
+		g.writeTimer = nil
+	}
+	g.writeMu.Unlock()
 	return err
 }
 
